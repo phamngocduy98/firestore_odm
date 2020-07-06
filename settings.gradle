@@ -1,0 +1,3 @@
+rootProject.name='FirebaseFirestoreHelper'
+include ':app'
+include ':firestoreodm'
