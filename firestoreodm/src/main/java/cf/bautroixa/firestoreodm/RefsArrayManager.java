@@ -39,14 +39,25 @@ public class RefsArrayManager<T extends Document> extends DocumentsManager<T> {
     @Override
     public void put(T data) {
         super.put(data);
-//        if (parentDocumentsManager != null) parentDocumentsManager.put(data);
         onListUpdated();
     }
 
     @Override
-    public void remove(String id) {
-        super.remove(id);
+    public T remove(String id) {
+        T data = super.remove(id);
+        if (parentDocumentsManager == null && data != null) data.onRemove();
         onListUpdated();
+        return data;
+    }
+
+    @Override
+    public void onClear() {
+        if (parentDocumentsManager == null) {
+            for (Document document : list) {
+                // remove listener and relate property (like latLng, marker) of each data
+                document.onRemove();
+            }
+        }
     }
 
     public void updateRefList(List<DocumentReference> documentReferences) {

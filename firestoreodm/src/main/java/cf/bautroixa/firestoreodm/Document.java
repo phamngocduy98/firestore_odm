@@ -173,7 +173,7 @@ public abstract class Document implements Serializable {
 
 
     @Exclude
-    public void setListenerRegistration(long retryInterval, @Nullable final DocumentsManager documentsManager, @Nullable final OnValueChangedListener initListener) {
+    public void setListenerRegistration(final long retryInterval, @Nullable final DocumentsManager documentsManager, @Nullable final OnValueChangedListener initListener) {
         this.initListener = initListener;
         final Document thisDocument = this;
         this.listenerRegistration = this.ref.addSnapshotListener(new EventListener<DocumentSnapshot>() {

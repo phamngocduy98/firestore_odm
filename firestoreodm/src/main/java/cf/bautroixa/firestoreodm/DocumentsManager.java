@@ -2,6 +2,7 @@ package cf.bautroixa.firestoreodm;
 
 import android.util.Log;
 
+import androidx.annotation.CallSuper;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.lifecycle.Lifecycle;
@@ -24,6 +25,13 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 
+/**
+ * DocumentsManager class
+ * @author PhamNgocDuy
+ * @version 0.0.1
+ * @since 2020/07/07
+ * @param <T> extends Document, Document type
+ */
 public class DocumentsManager<T extends Document> {
     private String TAG = "Manager";
     protected CollectionReference ref;
@@ -62,15 +70,36 @@ public class DocumentsManager<T extends Document> {
         return ref;
     }
 
+    /**
+     * create a new document in collection
+     * @param batch create document in this WriteBatch
+     * @param data
+     *      Document to create, use {@link Document#withRef(DocumentReference)}
+     *      to specify a custom DocumentReference or documentId
+     * @return DocumentReference to newly created document
+     */
     public DocumentReference create(WriteBatch batch, T data) {
         DocumentReference newDataRef = data.getId() != null ? ref.document(data.getId()) : ref.document();
         batch.set(newDataRef, data);
         return newDataRef;
     }
 
-    public Task<Void> create(T data) {
-        DocumentReference newDataRef = data.getId() != null ? ref.document(data.getId()) : ref.document();
-        return newDataRef.set(data);
+    /**
+     * create a new document in collection
+     * @param data
+     *      Document to create, use {@link Document#withRef(DocumentReference)}
+     *      to specify a custom DocumentReference or documentId
+     * @return Task of DocumentReference which DocumentReference reference to newly created document
+     */
+    public Task<DocumentReference> create(T data) {
+        final DocumentReference newDataRef = data.getId() != null ? ref.document(data.getId()) : ref.document();
+        return newDataRef.set(data).continueWith(new Continuation<Void, DocumentReference>() {
+            @Override
+            public DocumentReference then(@NonNull Task<Void> task) throws Exception {
+                if (!task.isSuccessful()) throw task.getException();
+                return newDataRef;
+            }
+        });
     }
 
     public void delete(@NonNull WriteBatch batch, String id) {
@@ -83,6 +112,12 @@ public class DocumentsManager<T extends Document> {
         return dataRef.delete();
     }
 
+    /**
+     * put method
+     * is called when a Document is added or updated to {@link DocumentsManager#list}
+     * @param data Document
+     */
+    @CallSuper
     public void put(T data) {
         String id = data.getId();
         Integer index = mapIdWithIndex.get(id);
@@ -102,11 +137,25 @@ public class DocumentsManager<T extends Document> {
         }
     }
 
+    /**
+     * add
+     * is called when a Document is added to {@link DocumentsManager#list}
+     * @param id documentId of Document
+     * @param data new Document to add
+     */
+    @CallSuper
     public void add(String id, T data) {
         list.add(data);
         mapIdWithIndex.put(id, list.size() - 1);
     }
 
+    /**
+     * update
+     * is called when a document is updated to {@link DocumentsManager#list}
+     * @param index index of Document in list array
+     * @param data Document contains updated value
+     */
+    @CallSuper
     public void update(int index, T data) {
         list.get(index).update(data);
     }
@@ -127,6 +176,11 @@ public class DocumentsManager<T extends Document> {
         return null;
     }
 
+    /**
+     * requestGet get a document with documentId
+     * @param id documentId to get
+     * @return Task contains Document value
+     */
     public Task<T> requestGet(String id) {
         T data = get(id);
         if (data != null) {
@@ -167,7 +221,13 @@ public class DocumentsManager<T extends Document> {
         }
     }
 
-    public void listenGet(LifecycleOwner lifecycleOwner, final String id, final OnDocumentGotListener<T> onDocumentGotListener) {
+    /**
+     * attachListenGet wait until Document with documentId is added to {@link DocumentsManager#list}
+     * @param lifecycleOwner you and use {@link androidx.fragment.app.Fragment} or {@link androidx.appcompat.app.AppCompatActivity}
+     * @param id documentId
+     * @param onDocumentGotListener callback Document value when this Document is added
+     */
+    public void attachListenGet(LifecycleOwner lifecycleOwner, final String id, final OnDocumentGotListener<T> onDocumentGotListener) {
         T data = get(id);
         if (data != null) {
             onDocumentGotListener.onGot(data);
@@ -259,11 +319,12 @@ public class DocumentsManager<T extends Document> {
         });
     }
 
-    public void remove(String id) {
+    @Nullable
+    public T remove(String id) {
         Integer index = mapIdWithIndex.get(id);
         if (index != null) {
             T data = list.get(index);
-            data.onRemove();
+//            TODO: data.onRemove() in sub-ref-arr-manager is unsafe
             list.remove(index.intValue());
             mapIdWithIndex.remove(id);
             for (int i = index; i < list.size(); i++) {
@@ -273,7 +334,9 @@ public class DocumentsManager<T extends Document> {
                 onListChangedListener.onItemRemoved(index, data);
                 onListChangedListener.onListSizeChanged(list, list.size());
             }
+            return data;
         }
+        return null;
     }
 
     public boolean contains(String id) {
@@ -303,10 +366,6 @@ public class DocumentsManager<T extends Document> {
     }
 
     public void clear() {
-        for (Document document : list) {
-            // remove listener and relate property (like latLng, marker) of each data
-            document.onRemove();
-        }
         list.clear();
         mapIdWithIndex.clear();
         onClear();
