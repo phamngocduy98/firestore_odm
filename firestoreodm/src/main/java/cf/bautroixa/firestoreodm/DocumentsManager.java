@@ -1,5 +1,6 @@
 package cf.bautroixa.firestoreodm;
 
+import android.os.Handler;
 import android.util.Log;
 
 import androidx.annotation.CallSuper;
@@ -14,6 +15,7 @@ import androidx.recyclerview.widget.SortedList;
 
 import com.google.android.gms.tasks.Continuation;
 import com.google.android.gms.tasks.Task;
+import com.google.android.gms.tasks.TaskCompletionSource;
 import com.google.firebase.firestore.CollectionReference;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.DocumentSnapshot;
@@ -27,55 +29,109 @@ import java.util.List;
 
 /**
  * DocumentsManager class
+ *
+ * @param <T> extends Document, Document type
  * @author PhamNgocDuy
  * @version 0.0.1
  * @since 2020/07/07
- * @param <T> extends Document, Document type
  */
-public class DocumentsManager<T extends Document> {
-    private String TAG = "Manager";
+public abstract class DocumentsManager<T extends Document> {
+    protected Document parentDocument;
     protected CollectionReference ref;
     protected Class<T> itemClass;
     protected HashMap<String, Integer> mapIdWithIndex;
     protected ArrayList<T> list;
     protected ArrayList<OnListChangedListener<T>> onListChangedListeners;
+    protected ArrayList<OnInitCompleteListener<T>> onInitCompleteListeners;
     protected boolean isListening = true;
+    protected boolean isListComplete = false;
+    private String TAG = "Manager";
 
+    /**
+     * construct new empty,boring,useless DocumentsManager
+     *
+     * @param itemClass Document class of its item
+     */
     public DocumentsManager(Class<T> itemClass) {
         this.itemClass = itemClass;
-        TAG = itemClass.getSimpleName() + TAG;
-        this.mapIdWithIndex = new HashMap<>();
-        this.list = new ArrayList<>();
-        this.onListChangedListeners = new ArrayList<>();
+        constructor(itemClass);
     }
 
+    /**
+     * construct new DocumentsManager
+     *
+     * @param itemClass           Document class of its item
+     * @param collectionReference CollectionReference it manages
+     */
     public DocumentsManager(Class<T> itemClass, CollectionReference collectionReference) {
         this.ref = collectionReference;
+        constructor(itemClass);
+    }
+
+    /**
+     * construct new Document with parentDocument
+     *
+     * @param itemClass           Document class of its item
+     * @param collectionReference CollectionReference it manages
+     * @param parentDocument      its parent
+     */
+    public DocumentsManager(Class<T> itemClass, CollectionReference collectionReference, Document parentDocument) {
+        this.ref = collectionReference;
+        this.parentDocument = parentDocument;
+        constructor(itemClass);
+    }
+
+    private void constructor(Class<T> itemClass) {
         this.itemClass = itemClass;
         TAG = itemClass.getSimpleName() + TAG;
         this.mapIdWithIndex = new HashMap<>();
         this.list = new ArrayList<>();
         this.onListChangedListeners = new ArrayList<>();
-    }
-
-    public boolean isListening() {
-        return isListening;
-    }
-
-    protected void setListening(boolean listening) {
-        isListening = listening;
+        this.onInitCompleteListeners = new ArrayList<>();
     }
 
     public CollectionReference getRef() {
         return ref;
     }
 
+    public boolean isListening() {
+        return isListening;
+    }
+
+    public void setParentDocument(Document parentDocument) {
+        this.parentDocument = parentDocument;
+    }
+
+    public Document getParentDocument() {
+        return parentDocument;
+    }
+
     /**
-     * create a new document in collection
+     * get DocumentReference to specified document id
+     *
+     * @param documentId
+     * @return DocumentReference
+     */
+    public DocumentReference getDocumentReference(String documentId) {
+        if (documentId == null) return ref.document();
+        return ref.document(documentId);
+    }
+
+    /**
+     * generate new DocumentReference
+     *
+     * @return DocumentReference
+     */
+    public DocumentReference getNewDocumentReference() {
+        return ref.document();
+    }
+
+    /**
+     * create a new document in collection with WriteBatch
+     *
      * @param batch create document in this WriteBatch
-     * @param data
-     *      Document to create, use {@link Document#withRef(DocumentReference)}
-     *      to specify a custom DocumentReference or documentId
+     * @param data  Document to create, use {@link Document#withRef(DocumentReference)}
+     *              to specify a custom DocumentReference or documentId
      * @return DocumentReference to newly created document
      */
     public DocumentReference create(WriteBatch batch, T data) {
@@ -85,10 +141,10 @@ public class DocumentsManager<T extends Document> {
     }
 
     /**
-     * create a new document in collection
-     * @param data
-     *      Document to create, use {@link Document#withRef(DocumentReference)}
-     *      to specify a custom DocumentReference or documentId
+     * create a new document in collection without WriteBatch
+     *
+     * @param data Document to create, use {@link Document#withRef(DocumentReference)}
+     *             to specify a custom DocumentReference or documentId
      * @return Task of DocumentReference which DocumentReference reference to newly created document
      */
     public Task<DocumentReference> create(T data) {
@@ -102,193 +158,130 @@ public class DocumentsManager<T extends Document> {
         });
     }
 
-    public void delete(@NonNull WriteBatch batch, String id) {
-        DocumentReference dataRef = ref.document(id);
+    /**
+     * delete a new document in collection with WriteBatch
+     *
+     * @param batch      delete document in this WriteBatch
+     * @param documentId documentId
+     */
+    public void delete(@NonNull WriteBatch batch, String documentId) {
+        DocumentReference dataRef = ref.document(documentId);
         batch.delete(dataRef);
     }
 
-    public Task<Void> delete(String id) {
-        DocumentReference dataRef = ref.document(id);
+    /**
+     * delete a new document in collection without WriteBatch
+     *
+     * @param documentId
+     * @return Task of deletion action
+     */
+    public Task<Void> delete(String documentId) {
+        DocumentReference dataRef = ref.document(documentId);
         return dataRef.delete();
     }
 
     /**
-     * put method
-     * is called when a Document is added or updated to {@link DocumentsManager#list}
-     * @param data Document
-     */
-    @CallSuper
-    public void put(T data) {
-        String id = data.getId();
-        Integer index = mapIdWithIndex.get(id);
-
-        if (index != null) {
-            update(index, data);
-            for (OnListChangedListener<T> onListChangedListener : onListChangedListeners) {
-                onListChangedListener.onItemChanged(index, data);
-            }
-        } else {
-            add(id, data);
-            for (int i = 0; i < onListChangedListeners.size(); i++) {
-                OnListChangedListener<T> onListChangedListener = onListChangedListeners.get(i);
-                onListChangedListener.onItemInserted(list.size() - 1, data);
-                onListChangedListener.onListSizeChanged(list, list.size());
-            }
-        }
-    }
-
-    /**
-     * add
-     * is called when a Document is added to {@link DocumentsManager#list}
-     * @param id documentId of Document
-     * @param data new Document to add
-     */
-    @CallSuper
-    public void add(String id, T data) {
-        list.add(data);
-        mapIdWithIndex.put(id, list.size() - 1);
-    }
-
-    /**
-     * update
-     * is called when a document is updated to {@link DocumentsManager#list}
-     * @param index index of Document in list array
-     * @param data Document contains updated value
-     */
-    @CallSuper
-    public void update(int index, T data) {
-        list.get(index).update(data);
-    }
-
-
-    public T rawPut(DocumentSnapshot documentSnapshot) {
-        T data = Document.newInstance(itemClass, documentSnapshot);
-        put(data);
-        return data;
-    }
-
-    @Nullable
-    public T get(String id) {
-        Integer index = mapIdWithIndex.get(id);
-        if (index != null) {
-            return list.get(index);
-        }
-        return null;
-    }
-
-    /**
      * requestGet get a document with documentId
-     * @param id documentId to get
+     *
+     * @param documentId documentId to get
      * @return Task contains Document value
      */
-    public Task<T> requestGet(String id) {
-        T data = get(id);
+    public Task<T> requestGet(String documentId) {
+        T data = get(documentId);
         if (data != null) {
             return TaskHelper.getCompletedTask(data);
         }
-        return ref.document(id).get().continueWith(new Continuation<DocumentSnapshot, T>() {
+        return ref.document(documentId).get().continueWith(new Continuation<DocumentSnapshot, T>() {
             @Override
-            @Nullable
             public T then(@NonNull Task<DocumentSnapshot> task) throws Exception {
-                if (task.isSuccessful() && task.getResult() != null) {
-                    return Document.newInstance(itemClass, task.getResult());
-                }
-                Log.e(TAG, "requestGet task failed, return value is NULL");
-                throw task.getException();
+                if (!task.isSuccessful()) throw task.getException();
+                if (task.getResult() == null)
+                    throw new Exception("requestGet Failed, result is null");
+                return Document.newInstance(itemClass, task.getResult());
             }
         });
     }
 
-    protected void requestListen(String id, final Document.OnValueChangedListener<T> onGotValue) {
-        T data = get(id);
-        if (data != null) {
-            onGotValue.onValueChanged(data);
-        }
-        listenNewDocument(ref.document(id), onGotValue);
-    }
-
-    protected void listenNewDocument(DocumentReference ref) {
-        listenNewDocument(ref, null);
-    }
-
-    protected void listenNewDocument(DocumentReference ref, @Nullable Document.OnValueChangedListener<T> onGotValue) {
-        try {
-            T data = itemClass.newInstance();
-            data.withRef(ref).withClass(itemClass);
-            data.setListenerRegistration(1000, this, onGotValue);
-        } catch (IllegalAccessException | InstantiationException e) {
-            e.printStackTrace();
-        }
-    }
-
     /**
      * attachListenGet wait until Document with documentId is added to {@link DocumentsManager#list}
-     * @param lifecycleOwner you and use {@link androidx.fragment.app.Fragment} or {@link androidx.appcompat.app.AppCompatActivity}
-     * @param id documentId
-     * @param onDocumentGotListener callback Document value when this Document is added
+     *
+     * @param lifecycleOwner         you and use {@link androidx.fragment.app.Fragment} or {@link androidx.appcompat.app.AppCompatActivity}
+     * @param documentId             documentId
+     * @param onValueChangedListener callback Document value when this Document is added
      */
-    public void attachListenGet(LifecycleOwner lifecycleOwner, final String id, final OnDocumentGotListener<T> onDocumentGotListener) {
-        T data = get(id);
+    public void attachListen(LifecycleOwner lifecycleOwner, final String documentId, final Document.OnValueChangedListener<T> onValueChangedListener) {
+        T data = get(documentId);
         if (data != null) {
-            onDocumentGotListener.onGot(data);
+            onValueChangedListener.onValueChanged(data);
             return;
         }
         attachListener(lifecycleOwner, new OnListChangedListener<T>() {
             @Override
             public void onItemInserted(int position, T data) {
-                if (data.getId().equals(id)) onDocumentGotListener.onGot(data);
+                if (data.getId().equals(documentId)) onValueChangedListener.onValueChanged(data);
             }
 
             @Override
             public void onItemChanged(int position, T data) {
-
+                if (data.getId().equals(documentId)) onValueChangedListener.onValueChanged(data);
             }
 
             @Override
             public void onItemRemoved(int position, T data) {
-
+                if (data.getId().equals(documentId)) onValueChangedListener.onValueChanged(data);
             }
 
             @Override
             public void onDataSetChanged(ArrayList<T> list) {
-                if (mapIdWithIndex.get(id) != null) onDocumentGotListener.onGot(get(id));
+                Integer index = mapIdWithIndex.get(documentId);
+                if (index != null) {
+                    T document = list.get(index);
+                    if (document != null) onValueChangedListener.onValueChanged(document);
+                }
             }
         });
     }
 
-    public void oneTimeListenGet(final String id, final OnDocumentGotListener<T> onDocumentGotListener) {
+    /**
+     * waitGet wait until Document with documentId is added to {@link DocumentsManager#list}
+     * waitGet never return null and there are cases that waitGet never complete, use your own risk
+     *
+     * @param id documentId
+     * @return
+     */
+    public Task<T> waitGet(final String id) {
         T data = get(id);
         if (data != null) {
-            onDocumentGotListener.onGot(data);
-            return;
+            return TaskHelper.getCompletedTask(data);
         }
-        addOnListChangedListener(new OnListChangedListener<T>() {
+        final TaskCompletionSource<T> taskCompletionSource = new TaskCompletionSource<>();
+        final OnListChangedListener<T> onListChangedListener = new OnListChangedListener<T>() {
             @Override
             public void onItemInserted(int position, T data) {
                 if (data.getId().equals(id)) {
                     removeOnListChangedListener(this);
-                    onDocumentGotListener.onGot(data);
+                    taskCompletionSource.setResult(data);
                 }
-            }
-
-            @Override
-            public void onItemChanged(int position, T data) {
-
-            }
-
-            @Override
-            public void onItemRemoved(int position, T data) {
-
             }
 
             @Override
             public void onDataSetChanged(ArrayList<T> list) {
                 if (mapIdWithIndex.get(id) != null) {
                     removeOnListChangedListener(this);
-                    onDocumentGotListener.onGot(get(id));
+                    taskCompletionSource.setResult(get(id));
                 }
             }
-        });
+        };
+        addOnListChangedListener(onListChangedListener);
+        new Handler().postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                removeOnListChangedListener(onListChangedListener);
+                taskCompletionSource.setException(new RuntimeException("waitGet timeout! no response for 10 seconds"));
+                Log.d(TAG, "[TIMEOUT] waitGet timeout after 10 seconds without any response");
+            }
+        }, 10000);
+        return taskCompletionSource.getTask();
     }
 
     /**
@@ -309,8 +302,6 @@ public class DocumentsManager<T extends Document> {
                     for (DocumentSnapshot documentSnapshot : querySnapshot) {
                         T data = Document.newInstance(itemClass, documentSnapshot);
                         queryDatas.add(data);
-                        // TODO: save got data to list, remember that, it should be saved in baseDatasManager to prevent unwanted item in list
-                        //put(data);
                     }
                     return queryDatas;
                 }
@@ -319,17 +310,112 @@ public class DocumentsManager<T extends Document> {
         });
     }
 
+    protected T getFromParent(DocumentReference documentReference) {
+        T data = get(documentReference.getId());
+        if (data != null) {
+            return data;
+        } else {
+            return listenNewDocument(documentReference);
+        }
+    }
+
+    // LISTEN API
+    @Nullable
+    protected T listenNewDocument(DocumentReference ref) {
+        try {
+            T data = itemClass.newInstance();
+            data.withRef(ref).withClass(itemClass);
+            data.addDocumentsManager(this);
+            data.setListenerRegistration(1000, null);
+            return data;
+        } catch (IllegalAccessException | InstantiationException e) {
+            e.printStackTrace();
+            throw new RuntimeException("Failed to listenNewDocument: itemClass#newInstance throw exception");
+        }
+    }
+
+    // LIST API
+
+    /**
+     * put method
+     * is called when a Document is added or updated to {@link DocumentsManager#list}
+     *
+     * @param data Document
+     */
+    @CallSuper
+    public void put(T data) {
+        String id = data.getId();
+        Integer index = mapIdWithIndex.get(id);
+
+        if (index != null) {
+            update(index, data);
+            onListChanged();
+            for (OnListChangedListener<T> onListChangedListener : onListChangedListeners) {
+                onListChangedListener.onItemChanged(index, data);
+            }
+        } else {
+            add(id, data);
+            onListChanged();
+            for (int i = 0; i < onListChangedListeners.size(); i++) {
+                OnListChangedListener<T> onListChangedListener = onListChangedListeners.get(i);
+                onListChangedListener.onItemInserted(list.size() - 1, data);
+                onListChangedListener.onListSizeChanged(list, list.size());
+            }
+        }
+    }
+
+    /**
+     * add
+     * is called when a Document is added to {@link DocumentsManager#list}
+     *
+     * @param id   documentId of Document
+     * @param data new Document to add
+     */
+    @CallSuper
+    public void add(String id, T data) {
+        list.add(data);
+        mapIdWithIndex.put(id, list.size() - 1);
+    }
+
+    /**
+     * update
+     * is called when a document is updated to {@link DocumentsManager#list}
+     *
+     * @param index index of Document in list array
+     * @param data  Document contains updated value
+     */
+    @CallSuper
+    public void update(int index, T data) {
+        list.get(index).update(data);
+    }
+
+    @Nullable
+    public T get(String id) {
+        Integer index = mapIdWithIndex.get(id);
+        if (index != null) {
+            return list.get(index);
+        }
+        return null;
+    }
+
+    @Nullable
+    public T remove(T document){
+        int index = list.indexOf(document);
+        return remove(list.get(index));
+    }
+
     @Nullable
     public T remove(String id) {
         Integer index = mapIdWithIndex.get(id);
         if (index != null) {
             T data = list.get(index);
-//            TODO: data.onRemove() in sub-ref-arr-manager is unsafe
+            data.removeDocumentsManager(this);
             list.remove(index.intValue());
             mapIdWithIndex.remove(id);
             for (int i = index; i < list.size(); i++) {
                 mapIdWithIndex.put(list.get(i).getId(), i);
             }
+            onListChanged();
             for (OnListChangedListener<T> onListChangedListener : onListChangedListeners) {
                 onListChangedListener.onItemRemoved(index, data);
                 onListChangedListener.onListSizeChanged(list, list.size());
@@ -337,32 +423,6 @@ public class DocumentsManager<T extends Document> {
             return data;
         }
         return null;
-    }
-
-    public boolean contains(String id) {
-        return mapIdWithIndex.get(id) != null;
-    }
-
-    public int indexOf(String id) {
-        Integer index = mapIdWithIndex.get(id);
-        return index != null ? index : -1;
-    }
-
-    public int indexOf(Document document) {
-        return indexOf(document.getId());
-    }
-
-    public DocumentReference getDocumentReference(String documentId) {
-        if (documentId == null) return ref.document();
-        return ref.document(documentId);
-    }
-
-    public DocumentReference getNewDocumentReference() {
-        return ref.document();
-    }
-
-    public ArrayList<T> getList() {
-        return list;
     }
 
     public void clear() {
@@ -375,20 +435,33 @@ public class DocumentsManager<T extends Document> {
         }
     }
 
-    public void onClear() {
-
+    public boolean contains(String documentId) {
+        return mapIdWithIndex.get(documentId) != null;
     }
 
-    public DocumentsManager<T> addOnListChangedListener(@NonNull OnListChangedListener<T> listener) {
+    public int indexOf(String id) {
+        Integer index = mapIdWithIndex.get(id);
+        return index != null ? index : -1;
+    }
+
+    public int indexOf(T document) {
+        return indexOf(document.getId());
+    }
+
+    public ArrayList<T> getList() {
+        return list;
+    }
+
+    // LISTENER
+
+    public void addOnListChangedListener(@NonNull OnListChangedListener<T> listener) {
         this.onListChangedListeners.add(listener);
         listener.onDataSetChanged(list);
         listener.onListSizeChanged(list, list.size());
-        return this;
     }
 
-    public DocumentsManager<T> removeOnListChangedListener(@NonNull OnListChangedListener<T> listener) {
+    public void removeOnListChangedListener(@NonNull OnListChangedListener<T> listener) {
         this.onListChangedListeners.remove(listener);
-        return this;
     }
 
     public void attachSortedList(LifecycleOwner lifecycleOwner, final SortedList<T> sortedList) {
@@ -486,19 +559,55 @@ public class DocumentsManager<T extends Document> {
         });
     }
 
-    public ArrayList<OnListChangedListener<T>> getListeners() {
-        return this.onListChangedListeners;
+
+    // INIT COMPLETE API
+    public void waitUntilInitComplete(final OnInitCompleteListener<T> onInitCompleteListener) {
+        if (isListComplete) {
+            onInitCompleteListener.onComplete(list);
+            return;
+        }
+        this.onInitCompleteListeners.add(new OnInitCompleteListener<T>() {
+            @Override
+            public void onComplete(ArrayList list) {
+                onInitCompleteListener.onComplete(list);
+                removeOnInitCompleteListener(onInitCompleteListener);
+            }
+        });
     }
 
-    public void restoreListeners(ArrayList<OnListChangedListener<T>> backupListeners) {
-        this.onListChangedListeners.addAll(backupListeners);
-        for (int i = 0; i < backupListeners.size(); i++) {
-            backupListeners.get(i).onDataSetChanged(this.list);
+    public void removeOnInitCompleteListener(OnInitCompleteListener<T> onInitCompleteListener) {
+        this.onInitCompleteListeners.remove(onInitCompleteListener);
+    }
+
+    public abstract boolean isListComplete();
+
+    public void onClear() {
+    }
+
+    protected void onListChanged() {
+        if (!isListComplete()) return;
+        for (OnInitCompleteListener<T> onInitCompleteListener : onInitCompleteListeners) {
+            onInitCompleteListener.onComplete(list);
+            removeOnInitCompleteListener(onInitCompleteListener);
         }
     }
 
+    @Override
+    protected void finalize() throws Throwable {
+        Log.d(TAG, " successfully garbage collected");
+    }
+
+    // INTERFACE
     public interface OnDocumentGotListener<T extends Document> {
         void onGot(T data);
+    }
+
+    public interface QueryCreator {
+        Query create(CollectionReference collectionReference);
+    }
+
+    public interface OnInitCompleteListener<T extends Document> {
+        void onComplete(ArrayList<T> list);
     }
 
     public static class OnListChangedListener<T extends Document> {
@@ -516,13 +625,5 @@ public class DocumentsManager<T extends Document> {
 
         public void onListSizeChanged(ArrayList<T> list, int size) {
         }
-    }
-
-    public interface QueryCreator {
-        Query create(CollectionReference collectionReference);
-    }
-
-    public interface OnInitCompleteListener<T extends Document> {
-        void onComplete(ArrayList<T> list);
     }
 }
